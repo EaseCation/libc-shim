@@ -59,6 +59,16 @@ int shim::sem_wait(host_sem_t *sem) {
     return semaphore_wait(*sem);
 }
 
+int shim::sem_trywait(host_sem_t *sem) {
+    auto result = semaphore_timedwait(*sem, mach_timespec_t{0, 0});
+    if(result == KERN_SUCCESS)
+        return 0;
+    errno = result == KERN_OPERATION_TIMED_OUT ? EAGAIN :
+            result == KERN_ABORTED ? EINTR : EINVAL;
+    bionic::update_errno();
+    return -1;
+}
+
 int shim::sem_post(host_sem_t *sem) {
     return semaphore_signal(*sem);
 }
@@ -99,6 +109,7 @@ void shim::add_sem_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"sem_init", sem_init},
         {"sem_destroy", sem_destroy},
         {"sem_wait", &detail::arg_rewrite_helper<int (::sem_t *)>::rewrite<sem_wait>},
+        {"sem_trywait", &detail::arg_rewrite_helper<int (::sem_t *)>::rewrite<sem_trywait>},
         {"sem_timedwait", &detail::arg_rewrite_helper<int (::sem_t *, const struct timespec *)>::rewrite<sem_timedwait>},
         {"sem_post", &detail::arg_rewrite_helper<int (::sem_t *)>::rewrite<sem_post>},
     });

@@ -39,6 +39,7 @@ namespace shim {
 
 #ifdef __APPLE__
     int sem_wait(host_sem_t *sem);
+    int sem_trywait(host_sem_t *sem);
     int sem_timedwait(host_sem_t *sem, const struct timespec *abs_timeout);
     int sem_post(host_sem_t *sem);
 #endif
