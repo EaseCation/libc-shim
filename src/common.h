@@ -14,6 +14,7 @@ namespace shim {
     namespace bionic {
 
         enum class clock_type : uint32_t {
+            MONOTONIC_RAW = 4,
             REALTIME = 0,
             MONOTONIC = 1,
             BOOTTIME = 7

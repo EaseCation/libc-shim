@@ -161,6 +161,7 @@ namespace shim {
     }
 
     int socket(bionic::af_family domain, bionic::socktype type, bionic::ipproto proto);
+    int socketpair(bionic::af_family domain, int type, bionic::ipproto proto, int sv[2]);
 
     int getaddrinfo(const char *node, const char *service, const bionic::addrinfo *hints, bionic::addrinfo **res);
 

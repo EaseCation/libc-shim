@@ -132,6 +132,12 @@ clockid_t bionic::to_host_clock_type(bionic::clock_type type) {
     switch (type) {
         case clock_type::REALTIME: return CLOCK_REALTIME;
         case clock_type::MONOTONIC: return CLOCK_MONOTONIC;
+        case clock_type::MONOTONIC_RAW:
+#ifdef CLOCK_MONOTONIC_RAW
+            return CLOCK_MONOTONIC_RAW;
+#else
+            return CLOCK_MONOTONIC;
+#endif
 #ifdef __APPLE__
         case clock_type::BOOTTIME: return CLOCK_MONOTONIC;
 #else
@@ -151,7 +157,7 @@ int bionic::to_host_mmap_flags(bionic::mmap_flags flags) {
     if ((uint32_t) flags & (uint32_t) mmap_flags::PRIVATE)
         ret |= MAP_PRIVATE;
     if ((uint32_t) flags & (uint32_t) mmap_flags::FIXED)
-        ret |= MAP_FILE;
+        ret |= MAP_FIXED;
     if ((uint32_t) flags & (uint32_t) mmap_flags::ANON)
         ret |= MAP_ANONYMOUS;
     if ((uint32_t) flags & (uint32_t) mmap_flags::SHARED)
@@ -739,7 +745,17 @@ static void stub() {
     abort();
 }
 
+static int entropy_bytes(void* buffer, size_t length) {
+    if(length > 256) {
+        errno = EIO;
+        return -1;
+    }
+    shim::arc4random_buf(buffer, length);
+    return 0;
+}
+
 void shim::add_unistd_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
+    list.emplace_back("getentropy", WithErrnoUpdate(entropy_bytes));
     list.insert(list.end(), {
         {"access", WithErrnoUpdate(IOREWRITE1(::access))},
         {"lseek", WithErrnoUpdate(::lseek)},

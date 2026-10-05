@@ -25,6 +25,8 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <ifaddrs.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 using namespace shim;
 
@@ -356,6 +358,24 @@ int bionic::to_host_sockopt(int level, int opt) {
 
 int shim::socket(bionic::af_family domain, bionic::socktype type, bionic::ipproto proto) {
     return ::socket(bionic::to_host_af_family(domain), bionic::to_host_socktype(type), bionic::to_host_ipproto(proto));
+}
+
+int shim::socketpair(bionic::af_family domain, int type, bionic::ipproto proto, int sv[2]) {
+    constexpr int nonblock = 0x800, cloexec = 0x80000;
+    auto baseType = static_cast<bionic::socktype>(type & ~(nonblock | cloexec));
+    int pair[2];
+    if(::socketpair(bionic::to_host_af_family(domain), bionic::to_host_socktype(baseType),
+                    bionic::to_host_ipproto(proto), pair) < 0) return -1;
+    for(int fd : pair) {
+        if(((type & nonblock) && ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) ||
+           ((type & cloexec) && ::fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)) {
+            int error = errno;
+            ::close(pair[0]); ::close(pair[1]); errno = error;
+            return -1;
+        }
+    }
+    sv[0] = pair[0]; sv[1] = pair[1];
+    return 0;
 }
 
 int shim::getaddrinfo(const char *node, const char *service, const bionic::addrinfo *hints, bionic::addrinfo **res) {
@@ -721,6 +741,7 @@ void shim::add_network_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) 
     list.insert(list.end(), {
         /* socket.h */
         {"socket", WithErrnoUpdate(socket)},
+        {"socketpair", WithErrnoUpdate(socketpair)},
         {"bind", WithErrnoUpdate(bind)},
         {"connect", WithErrnoUpdate(connect)},
         {"send", WithErrnoUpdate(send)},

@@ -38,7 +38,11 @@ int bionic::to_host_file_status_flags(bionic::file_status_flags flags) {
 
 bionic::file_status_flags bionic::from_host_file_status_flags(int flags) {
     using flag = file_status_flags;
-    if (((uint32_t) flags & (~(uint32_t) flag::KNOWN_FLAGS)) != 0)
+    // flags came from the host kernel, so validate using host constants.
+    // Darwin O_NONBLOCK is 0x4, whereas Bionic O_NONBLOCK is 0x800.
+    constexpr int hostKnown = O_ACCMODE | O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC |
+                              O_APPEND | O_NONBLOCK | O_CLOEXEC;
+    if (((uint32_t) flags & (~(uint32_t) hostKnown)) != 0)
         handle_runtime_error("Unsupported fd flag used %d", flags);
 
     int ret = 0;
@@ -169,10 +173,14 @@ int shim::open_3(const char *pathname, bionic::file_status_flags flags, int mode
 
 int shim::fcntl(int fd, bionic::fcntl_index cmd, void *arg) {
     switch (cmd) {
+        case bionic::fcntl_index::GETFD:
+            return ::fcntl(fd, F_GETFD);
         case bionic::fcntl_index::SETFD:
             return ::fcntl(fd, F_SETFD, (int)(intptr_t) arg);
-        case bionic::fcntl_index::GETFL:
-            return (int)bionic::from_host_file_status_flags(::fcntl(fd, F_GETFL));
+        case bionic::fcntl_index::GETFL: {
+            auto flags = ::fcntl(fd, F_GETFL);
+            return flags < 0 ? -1 : (int)bionic::from_host_file_status_flags(flags);
+        }
         case bionic::fcntl_index::SETFL:
             return ::fcntl(fd, F_SETFL, to_host_file_status_flags((bionic::file_status_flags) (size_t) arg));
         case bionic::fcntl_index::SETLK: {
