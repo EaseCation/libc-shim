@@ -231,7 +231,11 @@ int shim::poll_via_select(pollfd *fds, nfds_t nfds, int timeout) {
     return ret;
 }
 
-int shim::__poll_chk(pollfd *fds, nfds_t nfds, int timeout, size_t /*fdslen*/) {
+int shim::__poll_chk(pollfd *fds, nfds_t nfds, int timeout, size_t fdslen) {
+    if(nfds > fdslen / sizeof(pollfd)) {
+        fprintf(stderr, "poll buffer overflow");
+        abort();
+    }
 #ifdef __APPLE__
     int ret = poll_via_select(fds, nfds, timeout);
 #else

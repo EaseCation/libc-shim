@@ -139,8 +139,10 @@ char *shim::__fgets_chk(char *dst, int len, bionic::FILE *stream, size_t max_len
 }
 
 size_t shim::__fread_chk(void *buf, size_t size, size_t count, bionic::FILE *stream, size_t buf_size) {
-    if (size != 0 && count > SIZE_MAX / size)
-        return ::fread(buf, size, count, stream->wrapped);
+    if (size != 0 && count > SIZE_MAX / size) {
+        fprintf(stderr, "fread size overflow");
+        abort();
+    }
 
     size_t total = size * count;
     if (total > buf_size) {
@@ -153,8 +155,10 @@ size_t shim::__fread_chk(void *buf, size_t size, size_t count, bionic::FILE *str
 }
 
 size_t shim::__fwrite_chk(const void *buf, size_t size, size_t count, bionic::FILE *stream, size_t buf_size) {
-    if (size != 0 && count > SIZE_MAX / size)
-        return ::fwrite(buf, size, count, stream->wrapped);
+    if (size != 0 && count > SIZE_MAX / size) {
+        fprintf(stderr, "fwrite size overflow");
+        abort();
+    }
 
     size_t total = size * count;
     if (total > buf_size) {

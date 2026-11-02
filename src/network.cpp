@@ -26,6 +26,8 @@
 #include <cstring>
 #include <ifaddrs.h>
 #include <chrono>
+#include <climits>
+#include <algorithm>
 #include <poll.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -614,15 +616,33 @@ ssize_t shim::sendmsg(int sockfd, const msghdr *data, int flags) {
     return ::sendmsg(sockfd, data, hflags.flags);
 }
 
-int shim::sendmmsg(int sockfd, const struct mmsghdr *msgvec, unsigned int vlen, int flags) {
-    detail::sock_send_flags hflags(sockfd, flags);
-    for (unsigned int i = 0; i < vlen; ++i) {
-        ssize_t ret = ::sendmsg(sockfd, &msgvec[i].msg_hdr, hflags.flags);
-        if (ret < 0)
-            return i == 0 ? -1 : (int)i;
-        const_cast<struct mmsghdr&>(msgvec[i]).msg_len = (unsigned int)ret;
+static bool batch_message(const bionic::msghdr& source, ::msghdr& host) {
+    if(source.msg_iovlen > IOV_MAX) { errno = EMSGSIZE; return false; }
+    // Ancillary data has a separate ABI; reject it rather than corrupting memory.
+    if(source.msg_controllen) { errno = ENOTSUP; return false; }
+    host = {};
+    host.msg_iov = source.msg_iov;
+    host.msg_iovlen = source.msg_iovlen;
+    return true;
+}
+
+int shim::sendmmsg(int sockfd, bionic::mmsghdr *msgvec, unsigned int vlen, int flags) {
+    if(!msgvec && vlen) { errno = EFAULT; return -1; }
+    if(flags & ~(0x4000 | 0x40)) { errno = EINVAL; return -1; }
+    detail::sock_send_flags hflags(sockfd, flags & 0x4000);
+    int host_flags = hflags.flags | ((flags & 0x40) ? MSG_DONTWAIT : 0);
+    vlen = std::min(vlen, 1024u);
+    for(unsigned int i = 0; i < vlen; ++i) {
+        ::msghdr host{};
+        auto& source = msgvec[i].msg_hdr;
+        if(!batch_message(source, host)) return i ? static_cast<int>(i) : -1;
+        detail::sockaddr_in address(static_cast<bionic::sockaddr*>(source.msg_name), source.msg_namelen);
+        if(source.msg_name) { host.msg_name = address.ptr(); host.msg_namelen = address.len; }
+        ssize_t result = ::sendmsg(sockfd, &host, host_flags);
+        if(result < 0) return i ? static_cast<int>(i) : -1;
+        msgvec[i].msg_len = result;
     }
-    return (int)vlen;
+    return vlen;
 }
 
 ssize_t shim::recv(int sockfd, void *buf, size_t len, int flags) {
@@ -655,63 +675,48 @@ ssize_t shim::recvmsg(int sockfd, struct msghdr *data, int flags) {
     return val;
 }
 
-int shim::recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen, int flags, const struct timespec *timeout) {
-    int nflags = 0;
-    if (flags & 0x4000)
-        nflags |= MSG_DONTWAIT;
-    if (flags & 2)
-        nflags |= MSG_PEEK;
-    if ((flags & ~(0x4000 | 2)) != 0)
-        handle_runtime_error("recvmmsg with unsupported flags %d", flags);
-
+int shim::recvmmsg(int sockfd, bionic::mmsghdr *msgvec, unsigned int vlen, int flags, const struct timespec *timeout) {
+    if(!msgvec && vlen) { errno = EFAULT; return -1; }
+    if(flags & ~(0x40 | 2 | 0x10000)) { errno = EINVAL; return -1; }
+    if(timeout && (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000)) {
+        errno = EINVAL; return -1;
+    }
     using clock = std::chrono::steady_clock;
-    clock::time_point deadline;
-    bool use_timeout = timeout != nullptr;
-    if (use_timeout) {
-        deadline = clock::now() + std::chrono::seconds(timeout->tv_sec) +
-            std::chrono::nanoseconds(timeout->tv_nsec);
-    }
-
-    for (unsigned int i = 0; i < vlen; ++i) {
-        if (i > 0 && use_timeout && (nflags & MSG_DONTWAIT) == 0) {
-            auto now = clock::now();
-            if (now >= deadline)
-                return (int)i;
-
-            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-            pollfd pfd {};
-            pfd.fd = sockfd;
-            pfd.events = POLLIN;
-            int poll_ret = ::poll(&pfd, 1, (int)remaining.count());
-            if (poll_ret < 0)
-                return i == 0 ? -1 : (int)i;
-            if (poll_ret == 0)
-                return (int)i;
+    auto start = clock::now();
+    // Floating duration avoids integer overflow for untrusted large timeouts.
+    auto duration = timeout ? std::chrono::duration<double>(timeout->tv_sec + timeout->tv_nsec / 1e9)
+                            : std::chrono::duration<double>::max();
+    vlen = std::min(vlen, 1024u);
+    for(unsigned int i = 0; i < vlen; ++i) {
+        bool nonblocking = (flags & 0x40) || (i && (flags & 0x10000));
+        if(timeout && !nonblocking) {
+            auto left = duration - std::chrono::duration<double>(clock::now() - start);
+            if(left.count() <= 0) return i;
+            int milliseconds = static_cast<int>(std::min(left.count() * 1000 + 1, static_cast<double>(INT_MAX)));
+            pollfd descriptor{sockfd, POLLIN, 0};
+            int ready = ::poll(&descriptor, 1, milliseconds);
+            if(ready < 0) return i ? static_cast<int>(i) : -1;
+            if(!ready) return i;
         }
-
-        msghdr host_msg = msgvec[i].msg_hdr;
-        auto name = (bionic::sockaddr*)host_msg.msg_name;
-        auto addrlen = host_msg.msg_namelen;
-        detail::sockaddr_out haddr;
-        if (name) {
-            host_msg.msg_name = haddr.ptr();
-            host_msg.msg_namelen = haddr.len;
+        ::msghdr host{};
+        auto& target = msgvec[i].msg_hdr;
+        if(!batch_message(target, host)) return i ? static_cast<int>(i) : -1;
+        detail::sockaddr_out address;
+        if(target.msg_name) { host.msg_name = address.ptr(); host.msg_namelen = address.len; }
+        int host_flags = ((flags & 2) ? MSG_PEEK : 0) | ((nonblocking || timeout) ? MSG_DONTWAIT : 0);
+        ssize_t result = ::recvmsg(sockfd, &host, host_flags);
+        if(result < 0) return i ? static_cast<int>(i) : -1;
+        if(target.msg_name) {
+            auto length = static_cast<socklen_t>(target.msg_namelen);
+            address.len = host.msg_namelen;
+            address.apply(static_cast<bionic::sockaddr*>(target.msg_name), &length);
+            target.msg_namelen = length;
         }
-
-        ssize_t ret = ::recvmsg(sockfd, &host_msg, nflags);
-        if (ret < 0)
-            return i == 0 ? -1 : (int)i;
-
-        if (name)
-            haddr.apply(name, &addrlen);
-
-        msgvec[i].msg_hdr.msg_namelen = addrlen;
-        msgvec[i].msg_hdr.msg_flags = host_msg.msg_flags;
-        msgvec[i].msg_hdr.msg_controllen = 0;
-        msgvec[i].msg_len = (unsigned int)ret;
+        target.msg_controllen = 0;
+        target.msg_flags = (host.msg_flags & MSG_TRUNC ? 0x20 : 0) | (host.msg_flags & MSG_CTRUNC ? 8 : 0);
+        msgvec[i].msg_len = result;
     }
-
-    return (int)vlen;
+    return vlen;
 }
 
 ssize_t shim::sendto(int sockfd, const void *buf, size_t len, int flags, const bionic::sockaddr *addr, socklen_t addrlen) {

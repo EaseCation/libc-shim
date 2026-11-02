@@ -15,16 +15,21 @@
 #include <arpa/inet.h>
 #endif
 
-#if defined(__APPLE__) || defined(__FreeBSD__)
-struct mmsghdr {
-    struct msghdr msg_hdr;
-    unsigned int msg_len;
-};
-#endif
-
 namespace shim {
 
     namespace bionic {
+        // Android uses size_t lengths; Darwin uses 32-bit lengths here.
+        struct msghdr {
+            void* msg_name;
+            unsigned int msg_namelen;
+            iovec* msg_iov;
+            size_t msg_iovlen;
+            void* msg_control;
+            size_t msg_controllen;
+            int msg_flags;
+        };
+        struct mmsghdr { msghdr msg_hdr; unsigned int msg_len; };
+
 
         using socklen_t = int;
 
@@ -185,12 +190,12 @@ namespace shim {
     ssize_t send(int sockfd, const void *buf, size_t len, int flags);
 
     ssize_t sendmsg(int sockfd, const msghdr *data, int flags);
-    int sendmmsg(int sockfd, const struct mmsghdr *msgvec, unsigned int vlen, int flags);
+    int sendmmsg(int sockfd, bionic::mmsghdr *msgvec, unsigned int vlen, int flags);
 
     ssize_t recv(int sockfd, void *buf, size_t len, int flags);
 
     ssize_t recvmsg(int sockfd, struct msghdr *data, int flags);
-    int recvmmsg(int sockfd, struct mmsghdr *msgvec, unsigned int vlen, int flags, const struct timespec *timeout);
+    int recvmmsg(int sockfd, bionic::mmsghdr *msgvec, unsigned int vlen, int flags, const struct timespec *timeout);
 
     ssize_t sendto(int sockfd, const void *buf, size_t len, int flags, const bionic::sockaddr *addr, socklen_t addrlen);
 

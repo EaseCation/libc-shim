@@ -83,6 +83,8 @@
 #include <resolv.h>
 #endif
 #include <grp.h>
+#include <algorithm>
+#include <climits>
 
 #ifdef __linux__
 // glibc introduced arc4random_buf in 2.36
@@ -388,35 +390,33 @@ size_t shim::__strlcpy_chk(char *dst, const char *src, size_t size,
   return bionic::strlcpy(dst, src, size);
 }
 
-int shim::sendfile(int src, int dst, bionic::off_t *offset, size_t count) {
-    off_t c = offset ? (off_t)offset : 0;
+ssize_t shim::sendfile(int out_fd, int in_fd, bionic::off_t *offset, size_t count) {
+    off_t position = offset ? static_cast<off_t>(*offset) : ::lseek(in_fd, 0, SEEK_CUR);
+    if(position < 0) { if(offset) errno = EINVAL; return -1; }
 #ifdef __APPLE__
-    struct stat st;
-    if (fstat(dst, &st) < 0)
-        return -1;
-
-    off_t remaining = st.st_size - c;
-
-    off_t len;
-    if (count == (size_t)-1) {
-        len = remaining;  // send all remaining bytes
-    } else {
-        len = (off_t)count;
-        if (len > remaining)
-            len = remaining;
-    }
-    auto ret = ::sendfile(dst, src, c, &len, nullptr, 0);
-    // append the written count
-    c += len;
+    // Darwin's return value is status, and zero length means "through EOF".
+    if(count == 0) return 0;
+    off_t length = static_cast<off_t>(std::min(count, static_cast<size_t>(SSIZE_MAX)));
+    int status = ::sendfile(in_fd, out_fd, position, &length, nullptr, 0);
+    if(status < 0 && length == 0) return -1;
+    position += length;
+    if(offset) *offset = position;
+    else if(::lseek(in_fd, position, SEEK_SET) < 0) return -1;
+    return length;
 #elif defined(__FreeBSD__)
-    auto ret = ::sendfile(src, dst, c, count, nullptr, 0, 0);
+    if(count == 0) return 0;
+    off_t length = 0;
+    int status = ::sendfile(in_fd, out_fd, position, count, nullptr, &length, 0);
+    if(status < 0 && length == 0) return -1;
+    position += length;
+    if(offset) *offset = position;
+    else if(::lseek(in_fd, position, SEEK_SET) < 0) return -1;
+    return length;
 #else
-    auto ret = ::sendfile(src, dst, offset ? &c : nullptr, count);
+    auto result = ::sendfile(out_fd, in_fd, offset ? &position : nullptr, count);
+    if(offset) *offset = position;
+    return result;
 #endif
-    if(offset) {
-        *offset = (bionic::off_t)c;
-    }
-    return ret;
 }
 
 size_t shim::ctype_get_mb_cur_max() {
@@ -910,9 +910,6 @@ void shim::add_signal_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"sigdelset", +[](void *__set, int __signo) -> int {
             return 0;
         }},
-        {"sigdelset", +[](void *__set, int __signo) -> int {
-            return 0;
-        }},
         {"sigismember", +[](const void *__set, int __signo) -> int {
             return 0;
         }},
@@ -952,7 +949,7 @@ void shim::add_string_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
     list.insert(list.end(), {
         /* string.h */
         {"memccpy", ::memccpy},
-        {"environ", environ},
+        {"environ", &environ},
         {"memchr", (void *(*)(void *, int, size_t)) ::memchr},
         {"__memchr_chk", __memchr_chk},
         {"memcmp", (int (*)(const void *, const void *, size_t)) ::memcmp},
@@ -982,7 +979,11 @@ void shim::add_string_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"strtok_r", ::strtok_r},
         {"strerror", strerror},
         {"strerror_r", strerror_r},
-        {"__gnu_strerror_r", strerror_r},
+        {"__gnu_strerror_r", +[](int error, char* buffer, size_t length) -> char* {
+            // GNU returns a string pointer; the POSIX wrapper returns an int.
+            // GNU permits a static message instead of using the supplied buffer.
+            return shim::strerror(error);
+        }},
         {"strnlen", ::strnlen},
         {"strncat", ::strncat},
         {"strndup", ::strndup},

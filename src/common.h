@@ -109,7 +109,7 @@ namespace shim {
 
     int prctl(bionic::prctl_num opt, unsigned long a2, unsigned long a3, unsigned long a4, unsigned long a5);
 
-    int sendfile(int src, int dst, bionic::off_t *offset, size_t count);
+    ssize_t sendfile(int src, int dst, bionic::off_t *offset, size_t count);
 
     void *__memchr_chk(const void *src, int c, size_t len, size_t src_len);
 
