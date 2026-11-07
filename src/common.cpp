@@ -14,6 +14,7 @@
 #include "stat.h"
 #include "file_misc.h"
 #include "sysconf.h"
+#include "host_info.h"
 #include "system_properties.h"
 #include "sched.h"
 #include <cmath>
@@ -1083,8 +1084,6 @@ void shim::add_setjmp_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
 
 void shim::add_misc_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
     list.insert(list.end(), {
-        {"uname", uname}, // TODO: This may be wrong?
-
         {"utime", utime},
 
         {"writev", writev},
@@ -1131,6 +1130,7 @@ std::vector<shimmed_symbol> shim::get_shimmed_symbols() {
     add_epoll_shimmed_symbols(ret);
     add_misc_shimmed_symbols(ret);
     add_sysconf_shimmed_symbols(ret);
+    add_host_info_shimmed_symbols(ret);
     add_system_properties_shimmed_symbols(ret);
     add_eventfd_shimmed_symbols(ret);
     add_fnmatch_shimmed_symbols(ret);
