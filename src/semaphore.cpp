@@ -56,7 +56,12 @@ int shim::sem_destroy(host_sem_t *sem) {
 }
 
 int shim::sem_wait(host_sem_t *sem) {
-    return semaphore_wait(*sem);
+    auto result = semaphore_wait(*sem);
+    if(result == KERN_SUCCESS) return 0;
+    // POSIX 调用方不能接收 Mach 错误码，否则会误用未持有的锁。
+    errno = result == KERN_ABORTED ? EINTR : EINVAL;
+    bionic::update_errno();
+    return -1;
 }
 
 int shim::sem_trywait(host_sem_t *sem) {
