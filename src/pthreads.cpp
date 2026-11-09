@@ -113,18 +113,37 @@ int bionic::to_host_mutex_type(bionic::mutex_type type) {
     }
 }
 
+// 未知策略返回 -1，由调用方按 POSIX 返回 EINVAL，而不是终止进程。
 int bionic::to_host_sched_policy(shim::bionic::sched_policy type) {
     switch (type) {
         case sched_policy::OTHER: return SCHED_OTHER;
-        default: handle_runtime_error("Invalid sched policy");
+        case sched_policy::FIFO: return SCHED_FIFO;
+        case sched_policy::RR: return SCHED_RR;
+#ifdef SCHED_BATCH
+        case sched_policy::BATCH: return SCHED_BATCH;
+#else
+        case sched_policy::BATCH: return SCHED_OTHER;
+#endif
+#ifdef SCHED_IDLE
+        case sched_policy::IDLE: return SCHED_IDLE;
+#else
+        case sched_policy::IDLE: return SCHED_OTHER;
+#endif
+        default: return -1;
     }
 }
 
 bionic::sched_policy bionic::from_host_sched_policy(int type) {
-    switch (type) {
-        case SCHED_OTHER: return sched_policy::OTHER;
-        default: return (sched_policy) -1;
-    }
+    if (type == SCHED_OTHER) return sched_policy::OTHER;
+    if (type == SCHED_FIFO) return sched_policy::FIFO;
+    if (type == SCHED_RR) return sched_policy::RR;
+#ifdef SCHED_BATCH
+    if (type == SCHED_BATCH) return sched_policy::BATCH;
+#endif
+#ifdef SCHED_IDLE
+    if (type == SCHED_IDLE) return sched_policy::IDLE;
+#endif
+    return (sched_policy) -1;
 }
 
 host_pthread_attr::host_pthread_attr(shim::pthread_attr_t const *bionic_attr) {
@@ -182,8 +201,11 @@ int shim::pthread_setschedparam(pthread_t thread, bionic::sched_policy policy, c
     int ret = ::pthread_getschedparam(thread, &hpolicy, &hparam);
     if (ret != 0)
         return bionic::translate_errno_from_host(ret);
-    if (policy != (bionic::sched_policy) -1)
+    if (policy != (bionic::sched_policy) -1) {
         hpolicy = bionic::to_host_sched_policy(policy);
+        if (hpolicy == -1)
+            return EINVAL; // 与 Bionic 相同的 errno 取值
+    }
     hparam.sched_priority = param->sched_priority;
     ret = ::pthread_setschedparam(thread, hpolicy, &hparam);
     return bionic::translate_errno_from_host(ret);

@@ -133,8 +133,13 @@ namespace shim {
             clock_type clock : 2;
         };
 
+        // Bionic/Linux 调度策略取值；宿主取值在 macOS 上不同，需要转换。
         enum class sched_policy {
-            OTHER = 0
+            OTHER = 0,
+            FIFO = 1,
+            RR = 2,
+            BATCH = 3,
+            IDLE = 5
         };
 
         static int to_host_sched_policy(sched_policy type);
